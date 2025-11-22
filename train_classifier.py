@@ -1,11 +1,12 @@
-# train_classifier.py
 import csv
 import numpy as np
 import os
-import tempfile
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from sklearn.utils.class_weight import compute_class_weight
+import tempfile # # Thư viện tạo thư mục tạm thời
+
+# # Thư viện Scikit-learn
+from sklearn.model_selection import train_test_split # Chia tập dữ liệu
+from sklearn.preprocessing import LabelEncoder # Mã hóa nhãn
+from sklearn.utils.class_weight import compute_class_weight # cân bằng trọng số lớp
 import tensorflow as tf
 
 CSV_PATH = "keypoints_dataset.csv"
@@ -18,31 +19,47 @@ def load_dataset(csv_path):
         reader = csv.reader(f)
         header = next(reader)
         rows = [r for r in reader]
-    labels = [r[0] for r in rows]
-    X = np.array([[float(x) for x in r[1:]] for r in rows], dtype=np.float32)
-    return X, labels
+    
+    labels = [r[0] for r in rows] # Lấy cột đầu tiên của mỗi dòng làm Nhãn
+    X = []
+    filtered_labels = []
+    for r in rows:
+        try:
+            # Lấy từ cột thứ 2 trở đi, chuyển từ chuỗi ký tự sang số thực
+            X.append([float(x) for x in r[1:]])
+            filtered_labels.append(r[0]) # Chỉ thêm nhãn nếu không có lỗi chuyển đổi
+        
+        # Nếu có dòng nào bị lỗi -> bỏ qua
+        except ValueError:
+            continue
+        
+    X = np.array(X, dtype=np.float32) # Chuyển sang mảng numpy
+    return X, filtered_labels # X: đề bài, filtered_labels: đáp án
 
 def build_model(input_dim, num_classes, use_advanced=True):
     if use_advanced:
-        # Improved architecture with better regularization
+        # Khởi tạo một mô hình dạng xếp chồng
         model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(input_dim,)),
+            tf.keras.layers.Input(shape=(input_dim,)), # Nhận input
+            
             # First layer with batch normalization
             tf.keras.layers.Dense(256, activation="relu"),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(0.3),
+            
             # Second layer
             tf.keras.layers.Dense(128, activation="relu"),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(0.3),
+            
             # Third layer
             tf.keras.layers.Dense(64, activation="relu"),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(0.2),
+            
             # Output layer
             tf.keras.layers.Dense(num_classes, activation="softmax"),
         ])
-        # Use learning rate scheduling in optimizer
         initial_learning_rate = 0.001
         lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate,
@@ -52,7 +69,6 @@ def build_model(input_dim, num_classes, use_advanced=True):
         )
         optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
     else:
-        # Original simpler architecture
         model = tf.keras.Sequential([
             tf.keras.layers.Input(shape=(input_dim,)),
             tf.keras.layers.Dense(128, activation="relu"),
@@ -72,10 +88,14 @@ def build_model(input_dim, num_classes, use_advanced=True):
 
 def main():
     X, labels = load_dataset(CSV_PATH)
+    
+    if len(X) == 0:
+        print(f"\nERROR: Dataset is empty after loading from {CSV_PATH}. Cannot train model.")
+        return
+
     le = LabelEncoder()
     y = le.fit_transform(labels)
 
-    # Print dataset statistics
     unique, counts = np.unique(y, return_counts=True)
     print(f"\nDataset Statistics:")
     print(f"Total samples: {len(X)}")
@@ -92,7 +112,6 @@ def main():
     print(f"\nTraining samples: {len(X_train)}")
     print(f"Validation samples: {len(X_val)}")
 
-    # Compute class weights for imbalanced datasets
     class_weights = compute_class_weight(
         'balanced',
         classes=np.unique(y_train),
@@ -103,24 +122,14 @@ def main():
 
     model = build_model(X.shape[1], len(le.classes_), use_advanced=True)
     
-    # Callbacks for better training
     callbacks = [
-        # Early stopping to prevent overfitting
         tf.keras.callbacks.EarlyStopping(
             monitor='val_accuracy',
             patience=15,
             restore_best_weights=True,
             verbose=1
         ),
-        # Reduce learning rate on plateau
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=0.5,
-            patience=5,
-            min_lr=1e-6,
-            verbose=1
-        ),
-        # Model checkpointing
+  
         tf.keras.callbacks.ModelCheckpoint(
             'best_model.h5',
             monitor='val_accuracy',
@@ -129,23 +138,20 @@ def main():
         )
     ]
 
-    # Train with more epochs and better settings
     history = model.fit(
         X_train, y_train,
-        epochs=100,  # Increased from 25, but early stopping will prevent overfitting
+        epochs=100,  
         batch_size=32,
         validation_data=(X_val, y_val),
-        class_weight=class_weight_dict,  # Handle class imbalance
+        class_weight=class_weight_dict,  
         callbacks=callbacks,
         verbose=1
     )
     
-    # Load best model if checkpoint was used
     if os.path.exists('best_model.h5'):
         print("\nLoading best model from checkpoint...")
         model = tf.keras.models.load_model('best_model.h5')
     
-    # Evaluate final model
     val_loss, val_accuracy, val_top_k = model.evaluate(X_val, y_val, verbose=0)
     print(f"\nFinal Validation Results:")
     print(f"  Loss: {val_loss:.4f}")
@@ -154,16 +160,20 @@ def main():
     
     model.save(H5_PATH)
 
-    # Save labels
     with open(LABELS_PATH, "w") as f:
         for c in le.classes_:
             f.write(c + "\n")
 
-    # Export to TFLite - use SavedModel format for better compatibility
     with tempfile.TemporaryDirectory() as tmpdir:
-        saved_model_path = os.path.join(tmpdir, "saved_model")
-        model.export(saved_model_path)
-        converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_path)
+        try:
+            saved_model_path = os.path.join(tmpdir, "saved_model")
+            model.export(saved_model_path)
+            converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_path)
+        except AttributeError:
+             print("\nWARNING: model.export() not found. Falling back to tf.saved_model.save.")
+             tf.saved_model.save(model, tmpdir)
+             converter = tf.lite.TFLiteConverter.from_saved_model(tmpdir)
+             
         tflite_model = converter.convert()
         with open(TFLITE_PATH, "wb") as f:
             f.write(tflite_model)

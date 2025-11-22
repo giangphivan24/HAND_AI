@@ -1,3 +1,7 @@
 /_pycache_
 /*.txt
+/*.h5
+/*.tflite
 /TEST1
+/hand_env
+/AI
